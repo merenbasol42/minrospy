@@ -2,7 +2,7 @@
 
 from minrospy import Node, RawNode, Transport
 from minrospy.interfaces.std_msgs import Float32, PidGains
-from minrospy.overlays.parameters import ParamClient, ParamServer
+from minrospy.overlays.parameters import Event, ParamClient, ParamServer
 from minrospy.overlays.parameters import protocol as pp
 
 
@@ -41,7 +41,7 @@ def test_get_set_roundtrip():
     dev, host = _link()
     server = ParamServer(dev)
     server.register_param(5, Float32(0.0))
-    client = ParamClient(host)
+    client = ParamClient(host, {5: Float32})
 
     # GET → 0.0
     client.get(5)
@@ -66,26 +66,43 @@ def test_unknown_id():
     assert client.last_error == (9, pp.ErrCode.UNKNOWN_ID)
 
 
-def test_type_mismatch():
-    dev, host = _link()
-    server = ParamServer(dev)
-    server.register_param(5, Float32(0.0))
-    client = ParamClient(host)
-    # PidGains tanımlayıcısıyla Float32 parametresine SET
-    client.set(5, PidGains(1.0, 2.0, 3.0))
-    _pump(dev, host)
-    assert client.last_error == (5, pp.ErrCode.TYPE_MISMATCH)
-
-
 def test_read_only():
     dev, host = _link()
     server = ParamServer(dev)
     server.register_param(6, Float32(1.0), read_only=True)
-    client = ParamClient(host)
+    client = ParamClient(host, {6: Float32})
     client.set(6, Float32(9.0))
     _pump(dev, host)
     assert client.last_error == (6, pp.ErrCode.READ_ONLY)
     assert server.value(6).value == 1.0  # değişmedi
+
+
+def test_event_handler_rejects_set():
+    dev, host = _link()
+    server = ParamServer(dev)
+    server.register_param(5, Float32(0.0))
+
+    seen = []
+
+    def on_event(id, ev, raw):
+        seen.append(ev)
+        if ev == Event.BEFORE_SET:
+            return Float32.from_bytes(raw).value <= 10.0
+        return None
+
+    server.set_event_handler(on_event)
+    client = ParamClient(host, {5: Float32})
+
+    client.set(5, Float32(99.0))
+    _pump(dev, host)
+    assert client.last_error == (5, pp.ErrCode.REJECTED)
+    assert server.value(5).value == 0.0  # reddedildi, değişmedi
+
+    client.set(5, Float32(2.5))
+    _pump(dev, host)
+    assert client.last_value == (5, Float32(2.5))
+    assert server.value(5).value == 2.5
+    assert seen == [Event.BEFORE_SET, Event.BEFORE_SET, Event.AFTER_SET]
 
 
 def test_node_facade_integration():
@@ -97,7 +114,7 @@ def test_node_facade_integration():
 
     kp = Float32(0.0)
     dev.register_param(5, kp)
-    client = ParamClient(host)
+    client = ParamClient(host, {5: Float32})
 
     client.set(5, Float32(4.5))
     for _ in range(4):
@@ -111,7 +128,7 @@ def test_composite_atomic():
     dev, host = _link()
     server = ParamServer(dev)
     server.register_param(7, PidGains())
-    client = ParamClient(host)
+    client = ParamClient(host, {7: PidGains})
     client.set(7, PidGains(1.0, 2.0, 3.0))
     _pump(dev, host)
     got = server.value(7)

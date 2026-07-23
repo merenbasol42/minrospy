@@ -23,7 +23,7 @@ from .node import Node, Publisher
 from .overlays.reliability import Reliable
 from .overlays.logging import Logger, LogSink, Level
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
     "RawNode",

@@ -158,6 +158,13 @@ class Node:
     def register_param(self, id: int, msg, read_only: bool = False) -> None:
         self._params.register_param(id, msg, read_only)
 
+    def set_param_event_handler(self, handler) -> None:
+        """Opsiyonel: SET doğrulama (BEFORE_SET) + değişim bildirimi (AFTER_SET).
+
+        İmza: fn(id, event, value_bytes) -> bool | None.
+        """
+        self._params.set_event_handler(handler)
+
     def param_value(self, id: int):
         """Kayıtlı parametrenin güncel değerini döndürür (mesaj örneği)."""
         return self._params.value(id)
