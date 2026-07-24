@@ -50,18 +50,21 @@ class Parser:
         if self._state is _State.HEADER_WAIT:
             if byte == wireframe.HEADER[self._header_matched]:
                 self._header_matched += 1
+                self._frame_buf.append(byte)
                 if self._header_matched == wireframe.HEADER_SIZE:
                     self._state = _State.LENGTH_WAIT
             else:
-                self._header_matched = 0
-                # Hatalı bayt yeni bir header başlangıcı olabilir.
-                if byte == wireframe.HEADER[0]:
-                    self._header_matched = 1
+                # Hatalı bayt yeni bir header başlangıcı olabilir. header_matched==0
+                # iken frame_buf'ın boş olması değişmezdir (aşağıdaki ternary bunu
+                # korur), bu yüzden match dalında ayrıca sıfırlamaya gerek yok.
+                self._header_matched = 1 if byte == wireframe.HEADER[0] else 0
+                self._frame_buf = bytearray([byte]) if self._header_matched else bytearray()
 
         elif self._state is _State.LENGTH_WAIT:
+            self._frame_buf.append(byte)
             if byte < wireframe.MIN_DATA_LEN or byte > self.max_data:
                 self._emit_error(Error.INVALID_LENGTH)
-                self._reset()
+                self._resync()
                 return
             self._data_len = byte
             self._data_remaining = byte
@@ -70,6 +73,7 @@ class Parser:
             self._state = _State.DATA_READING
 
         elif self._state is _State.DATA_READING:
+            self._frame_buf.append(byte)
             self._data.append(byte)
             self._crc = wireframe.crc8_update(self._crc, byte)
             self._data_remaining -= 1
@@ -77,20 +81,41 @@ class Parser:
                 self._state = _State.CRC_WAIT
 
         elif self._state is _State.CRC_WAIT:
+            self._frame_buf.append(byte)
             if byte == self._crc:
                 if self.on_frame_completed is not None:
                     self.on_frame_completed(bytes(self._data))
+                self._finish_frame()
             else:
                 self._emit_error(Error.CRC_MISMATCH)
-            self._reset()
+                self._resync()
 
     def _emit_error(self, err: Error) -> None:
         if self.on_error is not None:
             self.on_error(err)
 
+    def _finish_frame(self) -> None:
+        """Bir frame başarıyla tamamlanınca çağrılır — _resync() ile simetrik
+        isim: biri başarı, diğeri hata sonrası toparlanma yolunu temsil eder."""
+        self._reset()
+
+    def _resync(self) -> None:
+        """Geçersiz LENGTH veya CRC_MISMATCH sonrası çağrılır.
+
+        Eşleşmiş header'ı (wireframe.HEADER kendi içinde çakışmadığından "header
+        değil" olduğu kesin ispatlanmış tek bölge) atar; LEN/DATA/CRC olarak
+        tüketilmiş kalan baytları HEADER_WAIT'ten başlayarak yeniden tarar —
+        içlerinde gömülü olabilecek gerçek bir frame'in header'ı kaçırılmaz.
+        """
+        remaining = self._frame_buf[wireframe.HEADER_SIZE:]
+        self._reset()
+        for byte in remaining:
+            self._advance(byte)
+
     def _reset(self) -> None:
         self._state = _State.HEADER_WAIT
         self._header_matched = 0
+        self._frame_buf = bytearray()
         self._data = bytearray()
         self._data_len = 0
         self._data_remaining = 0
